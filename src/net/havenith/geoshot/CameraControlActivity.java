@@ -2,36 +2,37 @@ package net.havenith.geoshot;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
 import java.util.Set;
-import java.util.UUID;
+import java.util.Timer;
+import java.util.TimerTask;
 
-
-
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.content.Context;
+import android.content.Intent;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
-import android.app.Activity;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothSocket;
-import android.content.Context;
-import android.content.Intent;
 import android.view.Menu;
 import android.widget.TextView;
 
+
 public class CameraControlActivity extends Activity {
 
+    private Timer timer = new Timer();
 	private TextView locationText;
 	private Location lastLocation = null;
 	private BluetoothAdapter bluetoothAdapter = null;
-	private BluetoothDevice connectedDevice = null;
-	private BluetoothSocket connectedSocket;
-	private OutputStream outputstream;
-	private ConnectThread connectThread;
+	private BluetoothConnection bluetoothConnection = new BluetoothConnection();
 	private static final int REQUEST_ENABLE_BT = 42;
 	private static final int REQUEST_SELECT_DEVICE = 43;
-	private static final String UUID_SERIAL = "00001101-0000-1000-8000-00805F9B34FB";
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
@@ -40,47 +41,21 @@ public class CameraControlActivity extends Activity {
 		locationText = (TextView)findViewById(R.id.position_text);
 		locationText.setText("no gps available");
 		setupBluetooth();
-		//startLocationRequests();
+		startLocationRequests();
 	}
 	
-	private class ConnectThread extends Thread {
-	 
-	    public void run() {
-	        // Cancel discovery because it will slow down the connection
-	        //bluetoothAdapter.cancelDiscovery();
-	 
-	        try {
-	            // Connect the device through the socket. This will block
-	            // until it succeeds or throws an exception
-	            connectedSocket.connect();
-	            outputstream = connectedSocket.getOutputStream();
-	            outputstream.write("+connect(danny)".getBytes());
-	            CameraControlActivity.this.runOnUiThread( new Runnable() {
-					
-					@Override
-					public void run() {
-						startLocationRequests();
-					}
-				});
-	        } catch (IOException connectException) {
-	            // Unable to connect; close the socket and get out
-	            try {
-	            	connectedSocket.close();
-	            } catch (IOException closeException) { }
-	            return;
-	        }
-	 
-	        // Do work to manage the connection (in a separate thread)
-	        
-	    }
-	 
-	    /** Will cancel an in-progress connection, and close the socket */
-	    public void cancel() {
-	        try {
-	        	connectedSocket.close();
-	        } catch (IOException e) { }
-	    }
+	@Override
+	protected void onDestroy() {
+		if (locationManager != null) {
+			locationManager.removeUpdates( locationListener);
+		}
+		if (bluetoothConnection != null)
+		{
+			bluetoothConnection.close();
+		}
+		super.onDestroy();
 	}
+
 	@Override
 	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 		if (requestCode == REQUEST_ENABLE_BT) {
@@ -97,20 +72,10 @@ public class CameraControlActivity extends Activity {
 				
 				for (BluetoothDevice device : pairedDevices) {
 					if (deviceString.equals( device.getName() + "\n" + device.getAddress() )) {
-						connectedDevice  = device;
-						try {
-							connectedSocket = device.createRfcommSocketToServiceRecord( UUID.fromString(UUID_SERIAL));
-							connectThread = new ConnectThread();
-							connectThread.start();
-						} catch (IOException e) {
-							e.printStackTrace();
-						}
+						bluetoothConnection.connect( device);
 						break;
 					}
 				}
-					
-				
-				
 			}
 		}
 		super.onActivityResult(requestCode, resultCode, data);
@@ -146,37 +111,49 @@ public class CameraControlActivity extends Activity {
 
 	private void startLocationRequests()
 	{
-		// Acquire a reference to the system Location Manager
-		LocationManager locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
+		locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
 
-		// Define a listener that responds to location updates
-		LocationListener locationListener = new LocationListener() {
+		locationListener = new LocationListener() {
 			@Override
 		    public void onLocationChanged(Location location) {
 		      // Called when a new location is found by the network location provider.
 		      makeUseOfNewLocation(location);
 		    }
-
 		    public void onStatusChanged(String provider, int status, Bundle extras) {}
-
 		    public void onProviderEnabled(String provider) {}
-
 		    public void onProviderDisabled(String provider) {}
 
 		  };
-
-		// Register the listener with the Location Manager to receive location updates
+		  
+		  // Register the listener with the Location Manager to receive location updates
 		  if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
 		  {
-			  locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 60 * 1000, 0, locationListener);
+			  locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5 * 1000, 0, locationListener);
 		  }
 		  
 		  if (locationManager.isProviderEnabled( LocationManager.GPS_PROVIDER))
 		  {
-			  locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 60 * 1000, 0, locationListener);
+			  locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5 * 1000, 0, locationListener);
 		  }
+
+		  // schedule a timer that will send the latest location to the bluetooth device
+		  // every 4s via the UI thread.
+		  timer.schedule( new TimerTask() {
+            @Override
+            public void run() {
+                CameraControlActivity.this.runOnUiThread( new Runnable() {
+                    @Override
+                    public void run() {
+                        sendLocation();
+                    }
+                });
+            }
+		  }, 4000, 4000);
 	}
+	
 	private static final int TWO_MINUTES = 1000 * 60 * 2;
+	private LocationManager locationManager;
+	private LocationListener locationListener;
 
 	/** Determines whether one Location reading is better than the current Location fix
 	  * @param location  The new Location that you want to evaluate
@@ -232,16 +209,105 @@ public class CameraControlActivity extends Activity {
 	    return provider1.equals(provider2);
 	}
 	
+	/**
+	 * Calculate an NMEA checksum over a range of bytes (characters).
+	 * This checksum is essentially the exclusive-or of every character between the '$' and '*' character. 
+	 * @param characters
+	 * @return
+	 */
+	private int checksum( byte characters[])
+	{
+		byte sum = 0;
+		for (byte c : characters){
+			if (c != '$' && c != '*') sum ^= c;
+		}
+		return sum;
+	}
+
+	private String formatLongLat( double longLat, boolean isLongitude) {
+		final String format = isLongitude?"%03d%05.3f":"%02d%05.3f";
+		return String.format( Locale.ENGLISH, format, (long)longLat, (longLat%1) * 60);
+	}
+	
+	@SuppressLint("SimpleDateFormat")
+	private String formatTimeLongLat( long time, double longitude, double latitude)
+	{
+		StringBuilder builder = new StringBuilder();
+		
+		builder.append( new SimpleDateFormat("HHmmss").format( time));
+		builder.append(",");
+
+		builder.append( formatLongLat( Math.abs(latitude), false));
+		builder.append( latitude > 0?",N,":",S,");
+
+		builder.append( formatLongLat( Math.abs(longitude), true));
+		builder.append( longitude > 0?",E,":",W,");
+		return builder.toString();
+	}
+
+	private String CreateGPRMC( Location location)
+	{
+		double latitude = location.getLatitude();
+		double longitude = location.getLongitude();
+		double knots = location.getSpeed() / 0.514; // from m/s to knots
+		long time = location.getTime();
+		
+		StringBuilder builder = new StringBuilder("$GPRMC,");
+		builder.append( new SimpleDateFormat("HHmmss").format( time));
+		builder.append(",A,");
+		
+		DecimalFormatSymbols dotInDecimals = new DecimalFormatSymbols(Locale.ENGLISH);
+		dotInDecimals.setDecimalSeparator('.');
+		
+		DecimalFormat latitudeFormat = new DecimalFormat( "0000.00", dotInDecimals);
+		builder.append( latitudeFormat.format( Math.abs(latitude) * 100));
+		builder.append( latitude > 0?",N,":",S,");
+
+		DecimalFormat longitudeFormat = new DecimalFormat( "00000.00", dotInDecimals);
+		builder.append( longitudeFormat.format( Math.abs(longitude) * 100));
+		builder.append( longitude > 0?",E,":",W,");
+		builder.append( new DecimalFormat("000.0", dotInDecimals).format(knots));
+		builder.append(',');
+		builder.append( new DecimalFormat("000.0", dotInDecimals).format( location.getBearing()));
+		builder.append( ',');
+		builder.append(new SimpleDateFormat("ddMMyy").format(time));
+		builder.append(",000.1,E*");
+		builder.append( String.format("%02X", checksum(builder.toString().getBytes())));
+		builder.append("\r\n");
+		return builder.toString();
+	}
+	
+	
+	private String CreateGPGGA( Location location)
+	{
+		double knots = location.getSpeed() / 0.514; // from m/s to knots
+		
+		StringBuilder builder = new StringBuilder("$GPGGA,");
+		builder.append(formatTimeLongLat( location.getTime(), location.getLongitude(), location.getLatitude()));
+		builder.append("1,04,0.9,0.0,M,0.0,M,,*");
+		builder.append( String.format("%02X", checksum(builder.toString().getBytes())));
+		builder.append("\r\n");
+
+		return builder.toString();
+	}
+	
 	protected void makeUseOfNewLocation(Location location) {
 		if (isBetterLocation(location, lastLocation))
 		{
 			lastLocation  = location;
-			StringBuilder builder = new StringBuilder();
-			builder.append( location.getLongitude());
-			builder.append( ", ");
-			builder.append( location.getLatitude());
-			locationText.setText( builder.toString());
 		}
+	}
+	
+	protected void sendLocation() {
+	    if (lastLocation != null) {
+	        StringBuilder builder = new StringBuilder();
+	        builder.append( lastLocation.getLongitude());
+	        builder.append( ", ");
+	        builder.append( lastLocation.getLatitude());
+	        String gprmc = CreateGPRMC(lastLocation);
+	        bluetoothConnection.write( gprmc.getBytes());
+	        bluetoothConnection.write( CreateGPGGA(lastLocation).getBytes());
+	    }
 	}
 
 	@Override
