@@ -305,6 +305,7 @@ public class CameraControlActivity extends Activity {
 	        builder.append( ", ");
 	        builder.append( lastLocation.getLatitude());
 	        String gprmc = CreateGPRMC(lastLocation);
+	        locationText.setText( gprmc);
 	        bluetoothConnection.write( gprmc.getBytes());
 	        bluetoothConnection.write( CreateGPGGA(lastLocation).getBytes());
 	    }
