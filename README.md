@@ -3,9 +3,10 @@ GeoShot
 
 Android app to send location information to a Nikon camera.
 
-This app uses the Android Location Provider to acquire periodical location updates. 
-It will construct NMEA sentences out of these and then send those sentences to a paired 
-bluetooth serial port.
+In fact, this turns an android phone into a bluetooth GPS receiver that can be attached 
+to other devices that need NMEA gps data.This app uses the Android Location Provider to 
+acquire periodical location updates. It will construct NMEA sentences out of these and 
+then send those sentences to a paired bluetooth serial port.
 
 Supporting hardware receives these sentences and then offer them to a Nikon D7000 camera.
 
